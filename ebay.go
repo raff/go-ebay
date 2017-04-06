@@ -16,13 +16,27 @@ const (
 	GLOBAL_ID_EBAY_DE = "EBAY-DE"
 	GLOBAL_ID_EBAY_IT = "EBAY-IT"
 	GLOBAL_ID_EBAY_ES = "EBAY-ES"
+
+	SORT_DEFAULT                     = ""
+	SORT_BEST_MATCH                  = "BestMatch"
+	SORT_BID_COUNT_FEWEST            = "BidCountFewest"
+	SORT_BID_COUNT_MOST              = "BidCountMost"
+	SORT_COUNTRY_ASCENDING           = "CountryAscending"
+	SORT_COUNTRY_DESCENDING          = "CountryDescending"
+	SORT_CURRENT_PRICE_HIGHEST       = "CurrentPriceHighest"
+	SORT_DISTANCE_NEAREST            = "DistanceNearest"
+	SORT_END_TIME_SOONEST            = "EndTimeSoonest"
+	SORT_PRICE_PLUS_SHIPPING_HIGHEST = "PricePlusShippingHighest"
+	SORT_PRICE_PLUS_SHIPPING_LOWEST  = "PricePlusShippingLowest"
+	SORT_START_TIME_NEWEST           = "StartTimeNewest"
 )
 
 type Item struct {
-	ItemId        string    `xml:"itemId"`
-	Title         string    `xml:"title"`
-	Location      string    `xml:"location"`
-	CurrentPrice  float64   `xml:"sellingStatus>currentPrice"`
+	ItemId   string `xml:"itemId"`
+	Title    string `xml:"title"`
+	Location string `xml:"location"`
+	// CurrentPrice  float64   `xml:"sellingStatus>currentPrice"`
+	CurrentPrice  float64   `xml:"sellingStatus>convertedCurrentPrice"`
 	ShippingPrice float64   `xml:"shippingInfo>shippingServiceCost"`
 	BinPrice      float64   `xml:"listingInfo>buyItNowPrice"`
 	ShipsTo       []string  `xml:"shippingInfo>shipToLocations"`
@@ -30,12 +44,22 @@ type Item struct {
 	ImageUrl      string    `xml:"galleryURL"`
 	Site          string    `xml:"globalId"`
 	EndTime       time.Time `xml:"listingInfo>endTime"`
+	SellerInfo    Seller    `xml:"sellerInfo"`
+}
+
+type Seller struct {
+	UserName      string  `xml:"sellerUserName"`
+	FeedbackScore int64   `xml:"feedbackScore"`
+	FeedbackPerc  float64 `xml:"positiveFeedbackPercent"`
 }
 
 type FindItemsResponse struct {
-	XmlName   xml.Name `xml:"findItemsByKeywordsResponse"`
-	Items     []Item   `xml:"searchResult>item"`
-	Timestamp string   `xml:"timestamp"`
+	XmlName      xml.Name `xml:"findItemsByKeywordsResponse"`
+	Items        []Item   `xml:"searchResult>item"`
+	Timestamp    string   `xml:"timestamp"`
+	PageNumber   int      `xml:"paginationOutput>pageNumber"`
+	TotalPages   int      `xml:"paginationOutput>totalPages"`
+	TotalEntries int      `xml:"paginationOutput>totalEntries"`
 }
 
 type ErrorMessage struct {
@@ -57,7 +81,7 @@ type EBay struct {
 	HttpRequest   *httprequest.HttpRequest
 }
 
-type getUrl func(string, string, int) (string, error)
+type getUrl func(string, string, string, int, int) (string, error)
 
 func New(application_id string) *EBay {
 	e := EBay{}
@@ -66,26 +90,38 @@ func New(application_id string) *EBay {
 	return &e
 }
 
-func (e *EBay) build_sold_url(global_id string, keywords string, entries_per_page int) (string, error) {
+func (e *EBay) build_sold_url(global_id string, keywords, sort_order string, entries_per_page, page_number int) (string, error) {
 	filters := url.Values{}
 	filters.Add("itemFilter(0).name", "Condition")
 	filters.Add("itemFilter(0).value(0)", "Used")
 	filters.Add("itemFilter(0).value(1)", "Unspecified")
 	filters.Add("itemFilter(1).name", "SoldItemsOnly")
 	filters.Add("itemFilter(1).value(0)", "true")
-	return e.build_url(global_id, keywords, "findCompletedItems", entries_per_page, filters)
+
+	if sort_order != "" {
+		filters.Add("sortOrder", sort_order)
+	}
+
+	return e.build_url(global_id, keywords, "findCompletedItems", entries_per_page, page_number, filters)
 }
 
-func (e *EBay) build_search_url(global_id string, keywords string, entries_per_page int) (string, error) {
+func (e *EBay) build_search_url(global_id string, keywords, sort_order string, entries_per_page, page_number int) (string, error) {
 	filters := url.Values{}
 	filters.Add("itemFilter(0).name", "ListingType")
 	filters.Add("itemFilter(0).value(0)", "FixedPrice")
 	filters.Add("itemFilter(0).value(1)", "AuctionWithBIN")
 	filters.Add("itemFilter(0).value(2)", "Auction")
-	return e.build_url(global_id, keywords, "findItemsByKeywords", entries_per_page, filters)
+
+	filters.Add("outputSelector(0)", "SellerInfo")
+
+	if sort_order != "" {
+		filters.Add("sortOrder", sort_order)
+	}
+
+	return e.build_url(global_id, keywords, "findItemsByKeywords", entries_per_page, page_number, filters)
 }
 
-func (e *EBay) build_url(global_id string, keywords string, operationName string, entries_per_page int, filters url.Values) (string, error) {
+func (e *EBay) build_url(global_id string, keywords string, operationName string, entries_per_page, page_number int, filters url.Values) (string, error) {
 	var u *url.URL
 	u, err := url.Parse("http://svcs.ebay.com/services/search/FindingService/v1")
 	if err != nil {
@@ -100,6 +136,9 @@ func (e *EBay) build_url(global_id string, keywords string, operationName string
 	params.Add("REST-PAYLOAD", "")
 	params.Add("keywords", keywords)
 	params.Add("paginationInput.entriesPerPage", strconv.Itoa(entries_per_page))
+	if page_number > 0 {
+		params.Add("paginationInput.pageNumber", strconv.Itoa(page_number))
+	}
 	for key := range filters {
 		for _, val := range filters[key] {
 			params.Add(key, val)
@@ -109,9 +148,9 @@ func (e *EBay) build_url(global_id string, keywords string, operationName string
 	return u.String(), err
 }
 
-func (e *EBay) findItems(global_id string, keywords string, entries_per_page int, getUrl getUrl) (FindItemsResponse, error) {
+func (e *EBay) findItems(global_id string, keywords, sort_order string, entries_per_page, page_number int, getUrl getUrl) (FindItemsResponse, error) {
 	var response FindItemsResponse
-	url, err := getUrl(global_id, keywords, entries_per_page)
+	url, err := getUrl(global_id, keywords, sort_order, entries_per_page, page_number)
 	if err != nil {
 		return response, err
 	}
@@ -137,12 +176,12 @@ func (e *EBay) findItems(global_id string, keywords string, entries_per_page int
 	return response, err
 }
 
-func (e *EBay) FindItemsByKeywords(global_id string, keywords string, entries_per_page int) (FindItemsResponse, error) {
-	return e.findItems(global_id, keywords, entries_per_page, e.build_search_url)
+func (e *EBay) FindItemsByKeywords(global_id string, keywords, sort_order string, entries_per_page, page_number int) (FindItemsResponse, error) {
+	return e.findItems(global_id, keywords, sort_order, entries_per_page, page_number, e.build_search_url)
 }
 
-func (e *EBay) FindSoldItems(global_id string, keywords string, entries_per_page int) (FindItemsResponse, error) {
-	return e.findItems(global_id, keywords, entries_per_page, e.build_sold_url)
+func (e *EBay) FindSoldItems(global_id string, keywords, sort_order string, entries_per_page, page_number int) (FindItemsResponse, error) {
+	return e.findItems(global_id, keywords, sort_order, entries_per_page, page_number, e.build_sold_url)
 }
 
 func (r *FindItemsResponse) Dump() {
@@ -157,9 +196,11 @@ func (r *FindItemsResponse) Dump() {
 		fmt.Println("\tListing Url:     ", i.ListingUrl)
 		fmt.Println("\tBin Price:       ", i.BinPrice)
 		fmt.Println("\tCurrent Price:   ", i.CurrentPrice)
+		fmt.Println("\tBuy-it-now Price:", i.BinPrice)
 		fmt.Println("\tShipping Price:  ", i.ShippingPrice)
 		fmt.Println("\tShips To:        ", i.ShipsTo)
 		fmt.Println("\tSeller Location: ", i.Location)
+		fmt.Println("\tSeller Info:     ", i.SellerInfo)
 		fmt.Println()
 	}
 }
