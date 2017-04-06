@@ -90,38 +90,62 @@ func New(application_id string) *EBay {
 	return &e
 }
 
+type filterList struct {
+	list           url.Values
+	itemFilter     int
+	outputSelector int
+}
+
+func newFilterList() *filterList {
+	return &filterList{list: url.Values{}}
+}
+
+func (f *filterList) addFilter(name string, value string) {
+	f.list.Add(name, value)
+}
+
+func (f *filterList) addItemFilter(name string, values ...string) {
+	item := fmt.Sprintf("itemFilter(%v)", f.itemFilter)
+	f.itemFilter += 1
+
+	f.list.Add(item+".name", name)
+	for i, v := range values {
+		f.list.Add(fmt.Sprintf("%s.value(%v)", item, i), v)
+	}
+}
+
+func (f *filterList) addOutputSelector(values ...string) {
+	for _, v := range values {
+		f.list.Add(fmt.Sprintf("outputSelector(%v)", f.outputSelector), v)
+		f.outputSelector += 1
+	}
+}
+
 func (e *EBay) build_sold_url(global_id string, keywords, sort_order string, entries_per_page, page_number int) (string, error) {
-	filters := url.Values{}
-	filters.Add("itemFilter(0).name", "Condition")
-	filters.Add("itemFilter(0).value(0)", "Used")
-	filters.Add("itemFilter(0).value(1)", "Unspecified")
-	filters.Add("itemFilter(1).name", "SoldItemsOnly")
-	filters.Add("itemFilter(1).value(0)", "true")
+	filters := newFilterList()
+	filters.addItemFilter("Condition", "Used", "Unspecified")
+	filters.addItemFilter("SoldItemsOnly", "true")
 
 	if sort_order != "" {
-		filters.Add("sortOrder", sort_order)
+		filters.addFilter("sortOrder", sort_order)
 	}
 
 	return e.build_url(global_id, keywords, "findCompletedItems", entries_per_page, page_number, filters)
 }
 
 func (e *EBay) build_search_url(global_id string, keywords, sort_order string, entries_per_page, page_number int) (string, error) {
-	filters := url.Values{}
-	filters.Add("itemFilter(0).name", "ListingType")
-	filters.Add("itemFilter(0).value(0)", "FixedPrice")
-	filters.Add("itemFilter(0).value(1)", "AuctionWithBIN")
-	filters.Add("itemFilter(0).value(2)", "Auction")
-
-	filters.Add("outputSelector(0)", "SellerInfo")
+	filters := newFilterList()
+	filters.addItemFilter("ListingType", "FixedPrice", "AuctionWithBIN", "Auction")
+	filters.addOutputSelector("SellerInfo")
 
 	if sort_order != "" {
-		filters.Add("sortOrder", sort_order)
+		filters.addFilter("sortOrder", sort_order)
 	}
 
 	return e.build_url(global_id, keywords, "findItemsByKeywords", entries_per_page, page_number, filters)
 }
 
-func (e *EBay) build_url(global_id string, keywords string, operationName string, entries_per_page, page_number int, filters url.Values) (string, error) {
+func (e *EBay) build_url(global_id string, keywords string, operationName string, entries_per_page, page_number int, filters *filterList) (string, error) {
 	var u *url.URL
 	u, err := url.Parse("http://svcs.ebay.com/services/search/FindingService/v1")
 	if err != nil {
@@ -139,8 +163,8 @@ func (e *EBay) build_url(global_id string, keywords string, operationName string
 	if page_number > 0 {
 		params.Add("paginationInput.pageNumber", strconv.Itoa(page_number))
 	}
-	for key := range filters {
-		for _, val := range filters[key] {
+	for key := range filters.list {
+		for _, val := range filters.list[key] {
 			params.Add(key, val)
 		}
 	}
