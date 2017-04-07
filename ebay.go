@@ -16,19 +16,23 @@ const (
 	GLOBAL_ID_EBAY_DE = "EBAY-DE"
 	GLOBAL_ID_EBAY_IT = "EBAY-IT"
 	GLOBAL_ID_EBAY_ES = "EBAY-ES"
+)
 
-	SORT_DEFAULT                     = ""
-	SORT_BEST_MATCH                  = "BestMatch"
-	SORT_BID_COUNT_FEWEST            = "BidCountFewest"
-	SORT_BID_COUNT_MOST              = "BidCountMost"
-	SORT_COUNTRY_ASCENDING           = "CountryAscending"
-	SORT_COUNTRY_DESCENDING          = "CountryDescending"
-	SORT_CURRENT_PRICE_HIGHEST       = "CurrentPriceHighest"
-	SORT_DISTANCE_NEAREST            = "DistanceNearest"
-	SORT_END_TIME_SOONEST            = "EndTimeSoonest"
-	SORT_PRICE_PLUS_SHIPPING_HIGHEST = "PricePlusShippingHighest"
-	SORT_PRICE_PLUS_SHIPPING_LOWEST  = "PricePlusShippingLowest"
-	SORT_START_TIME_NEWEST           = "StartTimeNewest"
+type SortOrderType string
+
+const (
+	SORT_DEFAULT                     = SortOrderType("")
+	SORT_BEST_MATCH                  = SortOrderType("BestMatch")
+	SORT_BID_COUNT_FEWEST            = SortOrderType("BidCountFewest")
+	SORT_BID_COUNT_MOST              = SortOrderType("BidCountMost")
+	SORT_COUNTRY_ASCENDING           = SortOrderType("CountryAscending")
+	SORT_COUNTRY_DESCENDING          = SortOrderType("CountryDescending")
+	SORT_CURRENT_PRICE_HIGHEST       = SortOrderType("CurrentPriceHighest")
+	SORT_DISTANCE_NEAREST            = SortOrderType("DistanceNearest")
+	SORT_END_TIME_SOONEST            = SortOrderType("EndTimeSoonest")
+	SORT_PRICE_PLUS_SHIPPING_HIGHEST = SortOrderType("PricePlusShippingHighest")
+	SORT_PRICE_PLUS_SHIPPING_LOWEST  = SortOrderType("PricePlusShippingLowest")
+	SORT_START_TIME_NEWEST           = SortOrderType("StartTimeNewest")
 )
 
 type Item struct {
@@ -81,7 +85,7 @@ type EBay struct {
 	HttpRequest   *httprequest.HttpRequest
 }
 
-type getUrl func(string, string, string, int, int) (string, error)
+type getUrl func(string, string, ...FilterOption) (string, error)
 
 func New(application_id string) *EBay {
 	e := EBay{}
@@ -121,37 +125,34 @@ func (f *filterList) addOutputSelector(values ...string) {
 	}
 }
 
-func (e *EBay) build_sold_url(global_id string, keywords, sort_order string, entries_per_page, page_number int) (string, error) {
+func (e *EBay) build_sold_url(global_id, keywords string, options ...FilterOption) (string, error) {
 	filters := newFilterList()
 	filters.addItemFilter("Condition", "Used", "Unspecified")
 	filters.addItemFilter("SoldItemsOnly", "true")
 
-	if sort_order != "" {
-		filters.addFilter("sortOrder", sort_order)
-	}
-
-	return e.build_url(global_id, keywords, "findCompletedItems", entries_per_page, page_number, filters)
+	return e.build_url(global_id, keywords, "findCompletedItems", filters, options...)
 }
 
-func (e *EBay) build_search_url(global_id string, keywords, sort_order string, entries_per_page, page_number int) (string, error) {
+func (e *EBay) build_search_url(global_id, keywords string, options ...FilterOption) (string, error) {
 	filters := newFilterList()
 	filters.addItemFilter("ListingType", "FixedPrice", "AuctionWithBIN", "Auction")
 	filters.addOutputSelector("SellerInfo")
 
-	if sort_order != "" {
-		filters.addFilter("sortOrder", sort_order)
-	}
-
-	return e.build_url(global_id, keywords, "findItemsByKeywords", entries_per_page, page_number, filters)
+	return e.build_url(global_id, keywords, "findItemsByKeywords", filters, options...)
 }
 
-func (e *EBay) build_url(global_id string, keywords string, operationName string, entries_per_page, page_number int, filters *filterList) (string, error) {
+func (e *EBay) build_url(global_id, keywords, operationName string, filters *filterList, options ...FilterOption) (string, error) {
 	var u *url.URL
 	u, err := url.Parse("http://svcs.ebay.com/services/search/FindingService/v1")
 	if err != nil {
 		return "", err
 	}
-	params := url.Values{}
+
+	for _, o := range options {
+		o(filters)
+	}
+
+	params := filters.list
 	params.Add("OPERATION-NAME", operationName)
 	params.Add("SERVICE-VERSION", "1.0.0")
 	params.Add("SECURITY-APPNAME", e.ApplicationId)
@@ -159,22 +160,13 @@ func (e *EBay) build_url(global_id string, keywords string, operationName string
 	params.Add("RESPONSE-DATA-FORMAT", "XML")
 	params.Add("REST-PAYLOAD", "")
 	params.Add("keywords", keywords)
-	params.Add("paginationInput.entriesPerPage", strconv.Itoa(entries_per_page))
-	if page_number > 0 {
-		params.Add("paginationInput.pageNumber", strconv.Itoa(page_number))
-	}
-	for key := range filters.list {
-		for _, val := range filters.list[key] {
-			params.Add(key, val)
-		}
-	}
 	u.RawQuery = params.Encode()
 	return u.String(), err
 }
 
-func (e *EBay) findItems(global_id string, keywords, sort_order string, entries_per_page, page_number int, getUrl getUrl) (FindItemsResponse, error) {
+func (e *EBay) findItems(global_id string, keywords string, getUrl getUrl, options ...FilterOption) (FindItemsResponse, error) {
 	var response FindItemsResponse
-	url, err := getUrl(global_id, keywords, sort_order, entries_per_page, page_number)
+	url, err := getUrl(global_id, keywords, options...)
 	if err != nil {
 		return response, err
 	}
@@ -200,12 +192,50 @@ func (e *EBay) findItems(global_id string, keywords, sort_order string, entries_
 	return response, err
 }
 
-func (e *EBay) FindItemsByKeywords(global_id string, keywords, sort_order string, entries_per_page, page_number int) (FindItemsResponse, error) {
-	return e.findItems(global_id, keywords, sort_order, entries_per_page, page_number, e.build_search_url)
+type FilterOption func(*filterList)
+
+func SortOrder(sort_order SortOrderType) FilterOption {
+	return func(f *filterList) {
+		f.addFilter("sortOrder", string(sort_order))
+	}
 }
 
-func (e *EBay) FindSoldItems(global_id string, keywords, sort_order string, entries_per_page, page_number int) (FindItemsResponse, error) {
-	return e.findItems(global_id, keywords, sort_order, entries_per_page, page_number, e.build_sold_url)
+func PageNumber(page_number int) FilterOption {
+	return func(f *filterList) {
+		if page_number > 0 {
+			f.addFilter("paginationInput.pageNumber", strconv.Itoa(page_number))
+		}
+	}
+}
+
+func PageSize(page_size int) FilterOption {
+	return func(f *filterList) {
+		if page_size > 0 {
+			f.addFilter("paginationInput.entriesPerPage", strconv.Itoa(page_size))
+		}
+	}
+}
+
+func MinPrice(price float64) FilterOption {
+	return func(f *filterList) {
+		f.addItemFilter("MinPrice", fmt.Sprintf("%v", price))
+	}
+}
+
+func MaxPrice(price float64) FilterOption {
+	return func(f *filterList) {
+		if price > 0.0 {
+			f.addItemFilter("MaxPrice", fmt.Sprintf("%v", price))
+		}
+	}
+}
+
+func (e *EBay) FindItemsByKeywords(global_id, keywords string, options ...FilterOption) (FindItemsResponse, error) {
+	return e.findItems(global_id, keywords, e.build_search_url, options...)
+}
+
+func (e *EBay) FindSoldItems(global_id, keywords string, options ...FilterOption) (FindItemsResponse, error) {
+	return e.findItems(global_id, keywords, e.build_sold_url, options...)
 }
 
 func (r *FindItemsResponse) Dump() {

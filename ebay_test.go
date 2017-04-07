@@ -20,7 +20,7 @@ func TestFindItemsByKeywords(t *testing.T) {
 	e := New(appid)
 
 	for p := 1; p <= 2; p++ {
-		response, err := e.FindItemsByKeywords(GLOBAL_ID_EBAY_US, "DJM 900, DJM 850", "", 10, p)
+		response, err := e.FindItemsByKeywords(GLOBAL_ID_EBAY_US, "DJM 900, DJM 850", PageSize(10), PageNumber(p))
 		if err != nil {
 			t.Errorf("ERROR: ", err)
 		} else {
